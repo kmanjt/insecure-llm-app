@@ -19,6 +19,12 @@ param logRetentionDays int = 30
 
 param maxUploadBytes int = 10485760
 
+@secure()
+param sonnylabsApiToken string = ''
+
+param sonnylabsBaseUrl string = 'https://sonnylabs-service.com'
+param sonnylabsAnalysisId string = ''
+
 param chatModelName string = 'gpt-4o-mini'
 param chatModelVersion string = '2024-07-18'
 param chatModelCapacity int = 20
@@ -37,6 +43,8 @@ var foundryHubName   = '${baseName}-hub-${suffix}'
 var foundryProjectName = '${baseName}-proj-${suffix}'
 var caeName          = '${baseName}-cae-${suffix}'
 var caName           = '${baseName}-app'
+var caBName          = '${baseName}-app-b'
+var deployVB         = !empty(sonnylabsApiToken)
 
 // ---------------------------------------------------------------------------
 // Shared identity for the container app
@@ -482,10 +490,100 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // ---------------------------------------------------------------------------
+// Version B: a second Container App on the same env, same image, same
+// backend services, with FIREWALL_ENABLED + SONNYLABS_API_KEY set so
+// app/firewall.py wraps every chat round-trip with a SonnyLabs scan.
+// Only deployed when sonnylabsApiKey is provided. The v B app is meant
+// to be compared side-by-side with v A under prompt-injection attack.
+// ---------------------------------------------------------------------------
+resource caB 'Microsoft.App/containerApps@2024-03-01' = if (deployVB) {
+  name: caBName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: cae.id
+    configuration: {
+      ingress: {
+        external: true
+        targetPort: 8000
+        transport: 'auto'
+      }
+      registries: [
+        {
+          server: acr.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        { name: 'basic-auth-password', value: basicAuthPassword }
+        { name: 'search-key', value: search.listAdminKeys().primaryKey }
+        { name: 'sonnylabs-api-token', value: sonnylabsApiToken }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'app'
+          image: containerImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1.0Gi'
+          }
+          env: [
+            { name: 'BASIC_AUTH_USERNAME', value: basicAuthUsername }
+            { name: 'BASIC_AUTH_PASSWORD', secretRef: 'basic-auth-password' }
+            { name: 'MAX_UPLOAD_BYTES', value: string(maxUploadBytes) }
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'AZURE_STORAGE_ACCOUNT', value: storage.name }
+            { name: 'AZURE_STORAGE_CONTAINER', value: 'documents' }
+            { name: 'AZURE_SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+            { name: 'AZURE_SEARCH_INDEX', value: 'documents' }
+            { name: 'AZURE_SEARCH_KEY', secretRef: 'search-key' }
+            { name: 'AZURE_AI_PROJECT_CONNECTION_STRING', value: projectConnectionString }
+            { name: 'AZURE_AI_AGENT_MODEL', value: chatModelName }
+            { name: 'FIREWALL_ENABLED', value: 'true' }
+            { name: 'SONNYLABS_API_TOKEN', secretRef: 'sonnylabs-api-token' }
+            { name: 'SONNYLABS_BASE_URL', value: sonnylabsBaseUrl }
+            { name: 'SONNYLABS_ANALYSIS_ID', value: sonnylabsAnalysisId }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 0
+        maxReplicas: 2
+      }
+    }
+  }
+  dependsOn: [
+    acrPull
+    blobDataRole
+    aisRole
+    projectRole
+    chatDeploy
+    gpt4o
+    gpt41mini
+    gpt41
+    o4mini
+    gpt54nano
+    gpt54mini
+    gpt54
+    gpt53chat
+    documentsContainer
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 output containerAppName string = ca.name
 output containerAppFqdn string = ca.properties.configuration.ingress.fqdn
+output containerAppBName string = deployVB ? caBName : ''
+output containerAppBFqdn string = deployVB ? caB!.properties.configuration.ingress.fqdn : ''
 output containerRegistryName string = acr.name
 output containerRegistryLoginServer string = acr.properties.loginServer
 output aiServicesName string = aiservices.name

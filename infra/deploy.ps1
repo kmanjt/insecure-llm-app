@@ -6,7 +6,13 @@ param(
   [string] $BasicAuthUsername = 'demo',
   [string] $BasicAuthPassword,
   [int]    $MaxUploadBytes = 10485760,
-  [string] $ImageTag  = 'v1'
+  [string] $ImageTag  = 'v1',
+  # SonnyLabs firewall config (all three need to be set for v B to actually
+  # firewall; the v B Container App still deploys with just the token, but
+  # its scans will fail-open until the rest are filled in).
+  [string] $SonnylabsApiToken = '',
+  [string] $SonnylabsBaseUrl = 'https://sonnylabs-service.com',
+  [string] $SonnylabsAnalysisId = ''
 )
 
 # Use Continue, not Stop: native `az` calls write warnings (e.g. "new Bicep
@@ -37,6 +43,9 @@ $deployJson = az deployment sub create `
     basicAuthUsername=$BasicAuthUsername `
     basicAuthPassword=$BasicAuthPassword `
     maxUploadBytes=$MaxUploadBytes `
+    sonnylabsApiToken=$SonnylabsApiToken `
+    sonnylabsBaseUrl=$SonnylabsBaseUrl `
+    sonnylabsAnalysisId=$SonnylabsAnalysisId `
   --output json
 if ($LASTEXITCODE -ne 0) { throw "Bicep deployment failed." }
 
@@ -44,6 +53,8 @@ $deployment = $deployJson | ConvertFrom-Json
 $acrName = $deployment.properties.outputs.containerRegistryName.value
 $caName  = $deployment.properties.outputs.containerAppName.value
 $fqdn    = $deployment.properties.outputs.containerAppFqdn.value
+$caBName = $deployment.properties.outputs.containerAppBName.value
+$fqdnB   = $deployment.properties.outputs.containerAppBFqdn.value
 $aisName = $deployment.properties.outputs.aiServicesName.value
 $hubName = $deployment.properties.outputs.foundryHubName.value
 
@@ -89,13 +100,22 @@ az acr build --registry $acrName --image "insecure-llm-app:$ImageTag" --no-logs 
 if ($LASTEXITCODE -ne 0) { throw "ACR build failed." }
 
 $image = "$acrName.azurecr.io/insecure-llm-app:$ImageTag"
-Write-Host "==> Step 3/3: pointing container app at $image ..."
+Write-Host "==> Step 3/3: pointing container app(s) at $image ..."
 az containerapp update --name $caName --resource-group $RgName --image $image | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "containerapp update failed." }
+if ($LASTEXITCODE -ne 0) { throw "containerapp update (v A) failed." }
+if ($caBName) {
+  az containerapp update --name $caBName --resource-group $RgName --image $image | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "containerapp update (v B) failed." }
+}
 
 Write-Host ""
 Write-Host "Deployed."
-Write-Host "  URL:      https://$fqdn"
+Write-Host "  Version A (no firewall):  https://$fqdn"
+if ($caBName) {
+  Write-Host "  Version B (firewall on):  https://$fqdnB"
+} else {
+  Write-Host "  Version B not deployed (pass -SonnylabsApiKey to enable)"
+}
 Write-Host "  Username: $BasicAuthUsername"
 Write-Host "  Password: $BasicAuthPassword"
 Write-Host ""

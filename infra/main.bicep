@@ -29,6 +29,16 @@ param logRetentionDays int = 30
 @description('Maximum upload size in bytes enforced server-side. Default 10 MiB.')
 param maxUploadBytes int = 10485760
 
+@description('SonnyLabs API token (bearer). When supplied, a second "version B" Container App is deployed alongside version A with FIREWALL_ENABLED=true. Leave empty to skip version B entirely. Pair with sonnylabsBaseUrl + sonnylabsAnalysisId.')
+@secure()
+param sonnylabsApiToken string = ''
+
+@description('SonnyLabs API base URL. Default is the public hosted endpoint.')
+param sonnylabsBaseUrl string = 'https://sonnylabs-service.com'
+
+@description('SonnyLabs analysis id for this chatbot (from the SonnyLabs dashboard).')
+param sonnylabsAnalysisId string = ''
+
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: rgName
   location: location
@@ -45,12 +55,17 @@ module resources './resources.bicep' = {
     containerImage: containerImage
     logRetentionDays: logRetentionDays
     maxUploadBytes: maxUploadBytes
+    sonnylabsApiToken: sonnylabsApiToken
+    sonnylabsBaseUrl: sonnylabsBaseUrl
+    sonnylabsAnalysisId: sonnylabsAnalysisId
   }
 }
 
 output rgName string = rg.name
 output containerAppName string = resources.outputs.containerAppName
 output containerAppFqdn string = resources.outputs.containerAppFqdn
+output containerAppBName string = resources.outputs.containerAppBName
+output containerAppBFqdn string = resources.outputs.containerAppBFqdn
 output containerRegistryName string = resources.outputs.containerRegistryName
 output containerRegistryLoginServer string = resources.outputs.containerRegistryLoginServer
 output aiServicesName string = resources.outputs.aiServicesName

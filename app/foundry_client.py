@@ -17,6 +17,7 @@ from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import FileSearchTool, ToolSet
 from azure.identity import DefaultAzureCredential
 
+from . import firewall
 from .config import settings
 
 # These IDs must match the deployment names in infra/resources.bicep.
@@ -230,6 +231,12 @@ def chat(
     else:
         resolved_agent_id = ensure_default_agent(model or DEFAULT_MODEL)
 
+    # Firewall: scan the inbound user message before the agent sees it.
+    try:
+        input_scan_id = firewall.check_or_raise("user_message", message)
+    except firewall.FirewallBlock as fb:
+        return _blocked_response(thread_id, fb)
+
     if thread_id is None:
         thread_id = _project.agents.create_thread().id
     else:
@@ -291,11 +298,37 @@ def chat(
                     sources.append(fname)
         parts.append(text)
     sources = [_resolve_filename(s) for s in sources]
-    return {
-        "reply": "".join(parts).strip(),
+    reply_text = "".join(parts).strip()
+
+    # Firewall: scan the assistant's response before the user sees it.
+    try:
+        output_scan_id = firewall.check_or_raise("assistant_output", reply_text)
+    except firewall.FirewallBlock as fb:
+        return _blocked_response(thread_id, fb, model_used=getattr(run, "model", None))
+
+    out = {
+        "reply": reply_text,
         "thread_id": thread_id,
         "sources": sources,
         "model_used": getattr(run, "model", None),
+    }
+    if input_scan_id:
+        out["input_scan_id"] = input_scan_id
+    if output_scan_id:
+        out["output_scan_id"] = output_scan_id
+    return out
+
+
+def _blocked_response(thread_id: str | None, fb: "firewall.FirewallBlock", model_used: str | None = None) -> dict:
+    return {
+        "reply": f"_Blocked by firewall ({fb.surface})._\n\n{fb.summary}",
+        "thread_id": thread_id,
+        "sources": [],
+        "model_used": model_used,
+        "blocked": True,
+        "block_surface": fb.surface,
+        "block_reason": fb.summary,
+        "scan_id": fb.scan_id,
     }
 
 

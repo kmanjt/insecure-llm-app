@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import firewall
 from .blob_client import delete_blob, ensure_container, list_blobs
 from .chat import answer
 from .config import settings
@@ -53,7 +54,13 @@ class CreateAgentRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "A", "firewall": False}
+    fw = firewall.is_enabled()
+    return {
+        "ok": True,
+        "version": "B" if fw else "A",
+        "firewall": fw,
+        "firewall_debug": firewall.diagnostic_state(),
+    }
 
 
 # ---------------------------------------------------------------------------

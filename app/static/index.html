@@ -24,6 +24,9 @@
       --warn-bg: rgba(239,68,68,.1);
       --warn-border: rgba(239,68,68,.3);
       --warn-text: #fca5a5;
+      --safe-bg: rgba(34,197,94,.12);
+      --safe-border: rgba(34,197,94,.3);
+      --safe-text: #86efac;
       --shadow: 0 1px 3px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.6);
       --shadow-lg: 0 20px 60px rgba(0,0,0,.6),0 0 0 1px var(--border-strong);
       --radius: 14px;
@@ -42,6 +45,9 @@
         --warn-bg: #fef2f2;
         --warn-border: #fecaca;
         --warn-text: #b91c1c;
+        --safe-bg: #f0fdf4;
+        --safe-border: #bbf7d0;
+        --safe-text: #15803d;
         --shadow: 0 1px 2px rgba(0,0,0,.06),0 1px 3px rgba(0,0,0,.1);
         --shadow-lg: 0 20px 60px rgba(0,0,0,.15),0 0 0 1px var(--border-strong);
       }
@@ -68,6 +74,9 @@
     }
     .brand h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .version-badge { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-border); letter-spacing: .02em; }
+    .version-badge.secure { background: var(--safe-bg); color: var(--safe-text); border-color: var(--safe-border); }
+    .banner.secure { background: var(--safe-bg); border-color: var(--safe-border); color: var(--safe-text); }
+    .msg.blocked .avatar { background: linear-gradient(135deg, #dc2626, #f59e0b); color: #fff; }
     .header-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
     .icon-btn {
       height: 34px; padding: 0 10px;
@@ -300,9 +309,9 @@
           </button>
         </div>
       </div>
-      <div class="banner">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        Demo only — no LLM firewall. Bounded to 30 messages / 600 tokens per reply to keep costs predictable.
+      <div class="banner" id="banner">
+        <svg id="bannerIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span id="bannerText">Demo only — no LLM firewall. Bounded to 30 messages / 600 tokens per reply to keep costs predictable.</span>
       </div>
     </header>
 
@@ -654,8 +663,14 @@
       div.dataset.content = content;
       if (opts.sources) div.dataset.sources = JSON.stringify(opts.sources);
     }
-    const avatar = role === 'user' ? 'You' : (role === 'system' ? '!' : 'AI');
-    const label  = role === 'user' ? 'You' : (role === 'system' ? 'System' : (selection?.kind === 'agent' ? selection.name : 'Assistant'));
+    const avatar = role === 'user' ? 'You'
+                 : role === 'system' ? '!'
+                 : role === 'blocked' ? '🛡'
+                 : 'AI';
+    const label  = role === 'user' ? 'You'
+                 : role === 'system' ? 'System'
+                 : role === 'blocked' ? 'Firewall'
+                 : (selection?.kind === 'agent' ? selection.name : 'Assistant');
     let bodyHtml;
     if (opts.typing) bodyHtml = `<div class="typing"><span></span><span></span><span></span></div>`;
     else if (role === 'bot') bodyHtml = marked.parse(content || '');
@@ -731,7 +746,11 @@
       const data = await res.json().catch(() => ({}));
       thinking.remove();
       if (!res.ok) appendMessage('system', `Error ${res.status}: ${data.detail || 'request failed'}`);
-      else {
+      else if (data.blocked) {
+        threadId = data.thread_id || threadId;
+        const div = appendMessage('blocked', `🛡️ Blocked by firewall (${data.block_surface}): ${data.block_reason}`);
+        saveChat();
+      } else {
         threadId = data.thread_id || threadId;
         appendMessage('bot', data.reply || '*(empty reply)*', { sources: data.sources });
         saveChat();
@@ -874,8 +893,37 @@
     newConversation();
   });
 
+  // ---- Version detection (A vs B) ----
+  async function detectVersion() {
+    try {
+      const r = await fetch('/health');
+      const d = await r.json();
+      const isB = !!d.firewall;
+      const v = d.version || 'A';
+      document.body.dataset.version = v;
+      const badge = document.querySelector('.version-badge');
+      if (badge) {
+        badge.textContent = `VERSION ${v}`;
+        badge.classList.toggle('secure', isB);
+      }
+      const banner = document.getElementById('banner');
+      banner?.classList.toggle('secure', isB);
+      const bannerText = document.getElementById('bannerText');
+      if (bannerText) {
+        bannerText.textContent = isB
+          ? 'Protected by SonnyLabs firewall — every message, response, and text upload is scanned for prompt injection, PII, and policy violations.'
+          : 'Demo only — no LLM firewall. Bounded to 30 messages / 600 tokens per reply to keep costs predictable.';
+      }
+      const bannerIcon = document.getElementById('bannerIcon');
+      if (bannerIcon && isB) {
+        bannerIcon.outerHTML = '<svg id="bannerIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
+      }
+    } catch {}
+  }
+
   // ---- Init ----
   (async () => {
+    detectVersion();
     await Promise.all([refreshModels(), refreshAgents(), refreshFilesCount()]);
     const saved = loadSelection();
     if (saved && (
