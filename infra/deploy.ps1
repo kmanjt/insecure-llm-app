@@ -11,7 +11,7 @@ param(
   # firewall; the v B Container App still deploys with just the token, but
   # its scans will fail-open until the rest are filled in).
   [string] $SonnylabsApiToken = '',
-  [string] $SonnylabsBaseUrl = 'https://sonnylabs-service.com',
+  [string] $SonnylabsBaseUrl = 'https://sonnylabs-service.onrender.com',
   [string] $SonnylabsAnalysisId = ''
 )
 

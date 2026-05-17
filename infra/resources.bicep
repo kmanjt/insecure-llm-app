@@ -22,7 +22,7 @@ param maxUploadBytes int = 10485760
 @secure()
 param sonnylabsApiToken string = ''
 
-param sonnylabsBaseUrl string = 'https://sonnylabs-service.com'
+param sonnylabsBaseUrl string = 'https://sonnylabs-service.onrender.com'
 param sonnylabsAnalysisId string = ''
 
 param chatModelName string = 'gpt-4o-mini'

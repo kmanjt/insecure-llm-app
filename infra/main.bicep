@@ -33,8 +33,8 @@ param maxUploadBytes int = 10485760
 @secure()
 param sonnylabsApiToken string = ''
 
-@description('SonnyLabs API base URL. Default is the public hosted endpoint.')
-param sonnylabsBaseUrl string = 'https://sonnylabs-service.com'
+@description('SonnyLabs API base URL. Default is the canonical hosted endpoint (per docs.sonnylabs.ai/python).')
+param sonnylabsBaseUrl string = 'https://sonnylabs-service.onrender.com'
 
 @description('SonnyLabs analysis id for this chatbot (from the SonnyLabs dashboard).')
 param sonnylabsAnalysisId string = ''
