@@ -327,12 +327,12 @@ def _blocked_response(
     input_scan: dict | None = None,
     model_used: str | None = None,
 ) -> dict:
+    # Modern sonnylabs-sdk reports a categorical decision and findings; the
+    # legacy single "score" / "threshold" fields no longer apply.
     block_scan = {
         "decision": "block",
         "scanned": True,
         "scan_id": fb.scan_id,
-        "score": fb.score,
-        "threshold": fb.threshold,
         "reason": fb.summary,
     }
     out = {
@@ -343,8 +343,6 @@ def _blocked_response(
         "blocked": True,
         "block_surface": fb.surface,
         "block_reason": fb.summary,
-        "block_score": fb.score,
-        "block_threshold": fb.threshold,
         "scan_id": fb.scan_id,
     }
     # Echo whichever scan corresponds to the blocked surface so the UI can

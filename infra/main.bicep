@@ -29,15 +29,12 @@ param logRetentionDays int = 30
 @description('Maximum upload size in bytes enforced server-side. Default 10 MiB.')
 param maxUploadBytes int = 10485760
 
-@description('SonnyLabs API token (bearer). When supplied, a second "version B" Container App is deployed alongside version A with FIREWALL_ENABLED=true. Leave empty to skip version B entirely. Pair with sonnylabsBaseUrl + sonnylabsAnalysisId.')
+@description('SonnyLabs API key. When supplied, a second "version B" Container App is deployed alongside version A with FIREWALL_ENABLED=true. Leave empty to skip version B entirely.')
 @secure()
-param sonnylabsApiToken string = ''
+param sonnylabsApiKey string = ''
 
-@description('SonnyLabs API base URL. Default is the canonical hosted endpoint (per docs.sonnylabs.ai/python).')
-param sonnylabsBaseUrl string = 'https://sonnylabs-service.onrender.com'
-
-@description('SonnyLabs analysis id for this chatbot (from the SonnyLabs dashboard).')
-param sonnylabsAnalysisId string = ''
+@description('Optional override for the SonnyLabs base URL. Leave empty to use the SDK default (https://api.sonnylabs.ai). Override only for self-hosted SonnyLabs.')
+param sonnylabsBaseUrl string = ''
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: rgName
@@ -55,9 +52,8 @@ module resources './resources.bicep' = {
     containerImage: containerImage
     logRetentionDays: logRetentionDays
     maxUploadBytes: maxUploadBytes
-    sonnylabsApiToken: sonnylabsApiToken
+    sonnylabsApiKey: sonnylabsApiKey
     sonnylabsBaseUrl: sonnylabsBaseUrl
-    sonnylabsAnalysisId: sonnylabsAnalysisId
   }
 }
 

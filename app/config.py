@@ -16,16 +16,14 @@ class Settings:
     project_conn_str: str = os.environ.get("AZURE_AI_PROJECT_CONNECTION_STRING", "")
     agent_model: str = os.environ.get("AZURE_AI_AGENT_MODEL", "gpt-4o-mini")
 
-    # SonnyLabs firewall (v B). All four env vars must be populated for the
-    # wrapper to engage; otherwise the app behaves like v A. The SDK on PyPI
-    # (sonnylabs >= 0.1.2) needs an analysis_id + base_url alongside the
-    # api_token, all available from the SonnyLabs dashboard.
+    # SonnyLabs firewall (v B). The modern sonnylabs-sdk needs only the API
+    # key; base_url defaults to https://api.sonnylabs.ai inside the SDK and
+    # only needs overriding for self-hosted deployments.
     firewall_enabled: bool = os.environ.get("FIREWALL_ENABLED", "").lower() in (
         "1", "true", "yes", "on",
     )
-    sonnylabs_api_token:   str = os.environ.get("SONNYLABS_API_TOKEN", "")
-    sonnylabs_base_url:    str = os.environ.get("SONNYLABS_BASE_URL", "")
-    sonnylabs_analysis_id: str = os.environ.get("SONNYLABS_ANALYSIS_ID", "")
+    sonnylabs_api_key:  str = os.environ.get("SONNYLABS_API_KEY") or os.environ.get("SONNYLABS_API_TOKEN", "")
+    sonnylabs_base_url: str = os.environ.get("SONNYLABS_BASE_URL", "")
 
 
 settings = Settings()

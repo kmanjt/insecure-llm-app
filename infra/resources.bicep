@@ -20,10 +20,9 @@ param logRetentionDays int = 30
 param maxUploadBytes int = 10485760
 
 @secure()
-param sonnylabsApiToken string = ''
+param sonnylabsApiKey string = ''
 
-param sonnylabsBaseUrl string = 'https://sonnylabs-service.onrender.com'
-param sonnylabsAnalysisId string = ''
+param sonnylabsBaseUrl string = ''
 
 param chatModelName string = 'gpt-4o-mini'
 param chatModelVersion string = '2024-07-18'
@@ -44,7 +43,7 @@ var foundryProjectName = '${baseName}-proj-${suffix}'
 var caeName          = '${baseName}-cae-${suffix}'
 var caName           = '${baseName}-app'
 var caBName          = '${baseName}-app-b'
-var deployVB         = !empty(sonnylabsApiToken)
+var deployVB         = !empty(sonnylabsApiKey)
 
 // ---------------------------------------------------------------------------
 // Shared identity for the container app
@@ -522,7 +521,7 @@ resource caB 'Microsoft.App/containerApps@2024-03-01' = if (deployVB) {
       secrets: [
         { name: 'basic-auth-password', value: basicAuthPassword }
         { name: 'search-key', value: search.listAdminKeys().primaryKey }
-        { name: 'sonnylabs-api-token', value: sonnylabsApiToken }
+        { name: 'sonnylabs-api-key', value: sonnylabsApiKey }
       ]
     }
     template: {
@@ -547,9 +546,8 @@ resource caB 'Microsoft.App/containerApps@2024-03-01' = if (deployVB) {
             { name: 'AZURE_AI_PROJECT_CONNECTION_STRING', value: projectConnectionString }
             { name: 'AZURE_AI_AGENT_MODEL', value: chatModelName }
             { name: 'FIREWALL_ENABLED', value: 'true' }
-            { name: 'SONNYLABS_API_TOKEN', secretRef: 'sonnylabs-api-token' }
+            { name: 'SONNYLABS_API_KEY', secretRef: 'sonnylabs-api-key' }
             { name: 'SONNYLABS_BASE_URL', value: sonnylabsBaseUrl }
-            { name: 'SONNYLABS_ANALYSIS_ID', value: sonnylabsAnalysisId }
           ]
         }
       ]

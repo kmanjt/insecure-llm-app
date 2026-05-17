@@ -5,7 +5,7 @@ azure-ai-projects==1.0.0b9
 azure-storage-blob==12.23.1
 azure-search-documents==11.5.1
 python-multipart==0.0.17
-sonnylabs
+sonnylabs-sdk==0.2.0
 pypdf==5.1.0
 python-docx==1.1.2
 openpyxl==3.1.5

@@ -99,8 +99,6 @@ def ingest_document(filename: str, content: bytes) -> dict:
                     "blocked": True,
                     "block_surface": fb.surface,
                     "block_reason": fb.summary,
-                    "block_score": fb.score,
-                    "block_threshold": fb.threshold,
                     "scan_id": fb.scan_id,
                 }
         elif extracted is None:

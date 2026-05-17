@@ -1,25 +1,24 @@
-"""SonnyLabs firewall wrapper (sonnylabs PyPI 0.1.x).
+"""SonnyLabs firewall wrapper (sonnylabs-sdk PyPI 0.2.x).
 
-Enabled only when ``FIREWALL_ENABLED`` is truthy AND all three SonnyLabs
-env vars are populated:
-
-  - ``SONNYLABS_API_TOKEN``    bearer token from the SonnyLabs dashboard
-  - ``SONNYLABS_BASE_URL``     SonnyLabs API base, e.g. ``https://sonnylabs-service.com``
-  - ``SONNYLABS_ANALYSIS_ID``  per-app analysis id from the SonnyLabs dashboard
+Enabled only when ``FIREWALL_ENABLED`` is truthy AND ``SONNYLABS_API_KEY``
+is set. The SDK has a baked-in default ``base_url``
+(``https://api.sonnylabs.ai``); only override via ``SONNYLABS_BASE_URL`` for
+self-hosted deployments. No ``analysis_id`` is needed — the modern SDK
+scopes per agent via the optional ``context.agent_id``.
 
 The firewall wraps every user message, every assistant response, and any
-text-extractable uploaded document. Decision is driven by the prompt-
-injection score returned by SonnyLabs (default threshold 0.65 — the SDK's
-own default).
+text-extractable uploaded document. Decision comes from
+``scan["decision"]["action"]``: ``allowed``, ``warned``, ``flagged``,
+or ``blocked``. Only ``blocked`` short-circuits the request.
 
 Fail-open behaviour (acceptable for a demo, fail-closed would be the right
 call for a real deployment):
 
-  - SDK not importable                                  → firewall disabled
-  - Required env vars missing                           → firewall disabled
-  - Client init throws                                  → firewall disabled
-  - ``analyze_text`` throws or returns ``success:false`` → treated as allowed
-  - Detection above threshold                           → :class:`FirewallBlock`
+  - SDK not importable                              → firewall disabled
+  - ``SonnyLabsClient`` init throws                 → firewall disabled
+  - ``create_scan`` raises (network, auth, 5xx)     → treated as allowed
+  - Decision ``warned`` / ``flagged``               → logged, passed through
+  - Decision ``blocked``                            → :class:`FirewallBlock`
 """
 import logging
 
@@ -36,27 +35,17 @@ except Exception as exc:  # noqa: BLE001
     print(f"[firewall] sonnylabs SDK unavailable: {exc}", flush=True)
 
 
-THRESHOLD = 0.65
+_AGENT_ID = "insecure-llm-app-b"
 
 
 class FirewallBlock(Exception):
-    """Raised when the prompt-injection score exceeds the configured threshold."""
+    """Raised when SonnyLabs returns ``decision.action == "blocked"``."""
 
-    def __init__(
-        self,
-        surface: str,
-        score: float,
-        threshold: float,
-        scan_id: str | None = None,
-    ):
+    def __init__(self, surface: str, summary: str, scan_id: str | None = None):
         self.surface = surface
-        self.score = score
-        self.threshold = threshold
-        self.scan_id = scan_id  # SDK 0.1.x calls this `tag`
-        self.summary = (
-            f"prompt-injection score {score:.2f} exceeds threshold {threshold}"
-        )
-        super().__init__(f"Blocked by firewall ({surface}): {self.summary}")
+        self.summary = summary
+        self.scan_id = scan_id
+        super().__init__(f"Blocked by firewall ({surface}): {summary}")
 
 
 # ---- Init ----------------------------------------------------------------
@@ -69,25 +58,23 @@ def _missing_env_reason() -> str | None:
         return "sonnylabs SDK not importable"
     if not settings.firewall_enabled:
         return "FIREWALL_ENABLED env var is not set"
-    if not settings.sonnylabs_api_token:
-        return "SONNYLABS_API_TOKEN env var is empty"
-    if not settings.sonnylabs_base_url:
-        return "SONNYLABS_BASE_URL env var is empty"
-    if not settings.sonnylabs_analysis_id:
-        return "SONNYLABS_ANALYSIS_ID env var is empty"
+    if not settings.sonnylabs_api_key:
+        return "SONNYLABS_API_KEY env var is empty"
     return None
 
 
 _init_error = _missing_env_reason()
 if _init_error is None:
     try:
-        _client = SonnyLabsClient(
-            api_token=settings.sonnylabs_api_token,
-            base_url=settings.sonnylabs_base_url,
-            analysis_id=settings.sonnylabs_analysis_id,
-            timeout=5,
+        kwargs = {"api_key": settings.sonnylabs_api_key}
+        if settings.sonnylabs_base_url:
+            kwargs["base_url"] = settings.sonnylabs_base_url
+        _client = SonnyLabsClient(**kwargs)
+        print(
+            f"[firewall] SonnyLabs firewall enabled "
+            f"(base_url={settings.sonnylabs_base_url or 'default'})",
+            flush=True,
         )
-        print("[firewall] SonnyLabs firewall enabled", flush=True)
     except Exception as exc:  # noqa: BLE001
         _init_error = f"client init: {type(exc).__name__}: {exc}"
         print(f"[firewall] {_init_error}", flush=True)
@@ -102,87 +89,86 @@ def diagnostic_state() -> dict:
     return {
         "sdk_available": _SDK_AVAILABLE,
         "env_firewall_enabled": settings.firewall_enabled,
-        "env_has_api_token": bool(settings.sonnylabs_api_token),
-        "env_has_base_url": bool(settings.sonnylabs_base_url),
-        "env_has_analysis_id": bool(settings.sonnylabs_analysis_id),
+        "env_has_api_key": bool(settings.sonnylabs_api_key),
+        "env_has_base_url_override": bool(settings.sonnylabs_base_url),
         "client_initialised": _client is not None,
         "init_error": _init_error,
-        "threshold": THRESHOLD,
     }
 
 
 # ---- Scan ----------------------------------------------------------------
+def check_or_raise(
+    surface: str,
+    text: str,
+    session_id: str | None = None,
+) -> dict | None:
+    """Scan ``text`` and raise :class:`FirewallBlock` on a blocked decision.
+    Returns a structured dict for non-blocked outcomes so the caller can
+    surface scan state in the UI. Returns ``None`` when the firewall isn't
+    enabled at all (v A behaviour).
 
-# SonnyLabs 0.1.x supports only "input" / "output". Map our richer surface
-# taxonomy onto that — documents are treated as inputs (user-supplied
-# text). When the SDK gains more surface types this map gets richer.
-_SCAN_TYPE = {
-    "user_message":     "input",
-    "assistant_output": "output",
-    "document":         "input",
-}
-
-
-def check_or_raise(surface: str, text: str, tag: str | None = None) -> dict | None:
-    """Scan ``text``. Raises :class:`FirewallBlock` on a positive detection;
-    otherwise returns a structured dict describing what the firewall did so
-    the caller can surface it to the user.
-
-    Shape when firewall is enabled:
+    Dict shape on enabled paths:
 
         {
             "decision":  "allow" | "skip",   # "block" comes via FirewallBlock
-            "scanned":   True | False,
+            "scanned":   bool,
             "scan_id":   str | None,
-            "score":     float | None,
-            "threshold": float,
-            "reason":    str | None,         # populated when scanned=False
+            "action":    "allowed" | "warned" | "flagged" | None,
+            "reason":    str | None,
         }
-
-    Returns ``None`` when the firewall isn't enabled at all (v A path)."""
+    """
     if _client is None:
         return None
 
-    scan_type = _SCAN_TYPE.get(surface, "input")
+    context: dict[str, str] = {"agent_id": _AGENT_ID}
+    if session_id:
+        context["session_id"] = session_id
+
     try:
-        result = _client.analyze_text(text, scan_type=scan_type, tag=tag)
+        result = _client.create_scan(
+            surface=surface,
+            content={"type": "text", "text": text},
+            context=context,
+        )
     except Exception as exc:  # noqa: BLE001
-        print(f"[firewall] analyze_text raised on {surface} (fail-open): {exc}", flush=True)
+        print(
+            f"[firewall] create_scan raised on {surface} (fail-open): {exc}",
+            flush=True,
+        )
         return {
             "decision": "skip",
             "scanned": False,
             "scan_id": None,
-            "score": None,
-            "threshold": THRESHOLD,
+            "action": None,
             "reason": f"{type(exc).__name__}: {exc}",
         }
 
-    if not result.get("success"):
-        err = result.get("error") or "scan reported success=false"
-        print(f"[firewall] not successful on {surface} (fail-open): {err}", flush=True)
-        return {
-            "decision": "skip",
-            "scanned": False,
-            "scan_id": result.get("tag"),
-            "score": None,
-            "threshold": THRESHOLD,
-            "reason": err,
-        }
+    decision = (result.get("decision") or {})
+    action = decision.get("action")
+    scan_id = result.get("id")
+    summary = (
+        decision.get("summary")
+        or decision.get("reason")
+        or decision.get("findings_summary")
+    )
 
-    injection = _client.get_prompt_injections(result, threshold=THRESHOLD)
-    score = float(injection.get("score", 0.0)) if injection else 0.0
-    if injection and injection.get("detected"):
+    if action == "blocked":
         raise FirewallBlock(
             surface=surface,
-            score=score,
-            threshold=THRESHOLD,
-            scan_id=result.get("tag"),
+            summary=summary or "blocked by policy",
+            scan_id=scan_id,
         )
+
+    if action in ("warned", "flagged"):
+        print(
+            f"[firewall] {action} on {surface} (scan_id={scan_id}, summary={summary})",
+            flush=True,
+        )
+
     return {
         "decision": "allow",
         "scanned": True,
-        "scan_id": result.get("tag"),
-        "score": score,
-        "threshold": THRESHOLD,
-        "reason": None,
+        "scan_id": scan_id,
+        "action": action,
+        "reason": summary,
     }

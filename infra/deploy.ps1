@@ -7,13 +7,30 @@ param(
   [string] $BasicAuthPassword,
   [int]    $MaxUploadBytes = 10485760,
   [string] $ImageTag  = 'v1',
-  # SonnyLabs firewall config (all three need to be set for v B to actually
-  # firewall; the v B Container App still deploys with just the token, but
-  # its scans will fail-open until the rest are filled in).
-  [string] $SonnylabsApiToken = '',
-  [string] $SonnylabsBaseUrl = 'https://sonnylabs-service.onrender.com',
-  [string] $SonnylabsAnalysisId = ''
+  # SonnyLabs firewall config. When -SonnylabsApiKey is supplied (or
+  # SONNYLABS_API_KEY is set in ../.env), v B is deployed too. base_url is
+  # optional — the SDK defaults to https://api.sonnylabs.ai.
+  [string] $SonnylabsApiKey = '',
+  [string] $SonnylabsBaseUrl = ''
 )
+
+# Convenience: load SonnyLabs key from ../.env if not provided on the
+# command line. .env is gitignored.
+if (-not $SonnylabsApiKey) {
+  $envFile = Join-Path $PSScriptRoot '..\.env'
+  if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+      if ($_ -match '^\s*SONNYLABS_API_KEY\s*=\s*(.+?)\s*$') {
+        $SonnylabsApiKey = $matches[1]
+        Write-Host "Loaded SONNYLABS_API_KEY from .env"
+      }
+      elseif ($_ -match '^\s*SONNYLABS_BASE_URL\s*=\s*(.+?)\s*$' -and -not $SonnylabsBaseUrl) {
+        $SonnylabsBaseUrl = $matches[1]
+        Write-Host "Loaded SONNYLABS_BASE_URL from .env"
+      }
+    }
+  }
+}
 
 # Use Continue, not Stop: native `az` calls write warnings (e.g. "new Bicep
 # release available") to stderr and PS 5.1 with Stop turns those into
@@ -43,9 +60,8 @@ $deployJson = az deployment sub create `
     basicAuthUsername=$BasicAuthUsername `
     basicAuthPassword=$BasicAuthPassword `
     maxUploadBytes=$MaxUploadBytes `
-    sonnylabsApiToken=$SonnylabsApiToken `
+    sonnylabsApiKey=$SonnylabsApiKey `
     sonnylabsBaseUrl=$SonnylabsBaseUrl `
-    sonnylabsAnalysisId=$SonnylabsAnalysisId `
   --output json
 if ($LASTEXITCODE -ne 0) { throw "Bicep deployment failed." }
 

@@ -720,19 +720,21 @@
     const decision = scan.decision || (scan.scanned ? 'allow' : 'skip');
     el.className = 'scan-badge ' + decision;
     let label;
-    const score = (typeof scan.score === 'number') ? scan.score.toFixed(2) : null;
+    // The modern sonnylabs-sdk reports a categorical action plus findings;
+    // we surface the action verb and let the tooltip carry the detail.
+    const action = scan.action ? ` (${scan.action})` : '';
     if (decision === 'allow') {
-      label = `🛡 scanned by SonnyLabs · score ${score ?? '—'} / ${scan.threshold ?? '—'}`;
+      label = `🛡 scanned by SonnyLabs${action}`;
     } else if (decision === 'block') {
-      label = `🛡 blocked · score ${score ?? '—'} > ${scan.threshold ?? '—'}`;
+      label = `🛡 blocked by SonnyLabs`;
     } else {
-      // "skip" — scan didn't run (network, bad creds, etc). Important UX
-      // signal: firewall is on but didn't actually protect this message.
       label = `🛡 scan unavailable · fail-open`;
     }
     el.textContent = label;
-    if (scan.reason) el.title = scan.reason;
-    else if (scan.scan_id) el.title = `scan_id: ${scan.scan_id}`;
+    const tooltipBits = [];
+    if (scan.reason) tooltipBits.push(scan.reason);
+    if (scan.scan_id) tooltipBits.push(`scan_id: ${scan.scan_id}`);
+    if (tooltipBits.length) el.title = tooltipBits.join('\n');
     return el;
   }
 
