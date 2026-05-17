@@ -193,11 +193,25 @@ When all three are set, `app/firewall.py` instantiates a `SonnyLabsClient` and w
 |---|---|---|
 | `user_message` (SDK `input`) | The user's message | Before it reaches the Foundry agent |
 | `assistant_output` (SDK `output`) | The agent's response | Before it's returned to the browser |
-| `document` (SDK `input`) | Plain-text uploads (.txt / .md / .csv / .log / .json / .yaml) | At ingest time, before the file lands in blob / vector store |
+| `document` (SDK `input`) | Extracted text from the upload | At ingest time, before the file lands in blob / vector store |
 
-If `is_prompt_injection(result, threshold=0.65)` returns `True`, a `FirewallBlock` is raised. The chat handler converts that into a `{"blocked": true, "block_surface": ..., "block_reason": ...}` response and the UI renders a shield-iconed "Firewall" message instead of the model reply.
+If `is_prompt_injection(result, threshold=0.65)` returns `True`, a `FirewallBlock` is raised. The chat handler converts that into a `{"blocked": true, "block_surface": ..., "block_reason": ...}` response and the UI renders a shield-iconed "Firewall" message instead of the model reply. For ingest, the response is `{"blocked": true, ...}` and the file never touches blob / vector store / AI Search.
 
-Binary uploads (PDF, Word, Excel, images) are not scanned in v B — that would need Azure AI Document Intelligence to extract text first. Documented gap.
+### Document extraction (what gets scanned, what doesn't)
+
+`app/ingest.py` does lightweight in-process text extraction so binary documents can be firewall-scanned before they're stored anywhere:
+
+| Format | Extractor | Scanned? |
+|---|---|---|
+| `.txt`, `.md`, `.csv`, `.log`, `.json`, `.yaml`, `.yml` | direct UTF-8 decode | ✓ |
+| `.pdf` | [`pypdf`](https://pypi.org/project/pypdf/) (first 20 pages) | ✓ |
+| `.docx` | [`python-docx`](https://pypi.org/project/python-docx/) (paragraphs + table cells) | ✓ |
+| `.xlsx` | [`openpyxl`](https://pypi.org/project/openpyxl/) (first 5 sheets, 500 rows each) | ✓ |
+| `.png`, `.jpg`, images, `.doc`, `.xls`, anything else | _no extractor_ | ✗ — passes through unscanned; response echoes `{"firewall":{"scanned":false,"reason":"no extractor for this file type"}}` |
+
+Note that Foundry's vector store also rejects unsupported file types (the agent's `file_search` only handles a fixed list). In that case the ingest pipeline still saves the file to blob storage but `vector_store_error` is returned to the caller; the upload doesn't 500.
+
+Closing the image-scanning gap would mean wiring **Azure AI Document Intelligence** (Read tier) for OCR — straightforward Bicep + SDK addition, ~$1.50 per 1000 pages, not done here.
 
 ### Failure mode (fail-open)
 

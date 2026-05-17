@@ -55,11 +55,19 @@ class CreateAgentRequest(BaseModel):
 @app.get("/health")
 def health():
     fw = firewall.is_enabled()
+    extractors = {}
+    for mod in ("pypdf", "docx", "openpyxl"):
+        try:
+            __import__(mod)
+            extractors[mod] = True
+        except Exception:  # noqa: BLE001
+            extractors[mod] = False
     return {
         "ok": True,
         "version": "B" if fw else "A",
         "firewall": fw,
         "firewall_debug": firewall.diagnostic_state(),
+        "extractors": extractors,
     }
 
 
