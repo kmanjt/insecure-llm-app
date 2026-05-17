@@ -77,6 +77,19 @@
     .version-badge.secure { background: var(--safe-bg); color: var(--safe-text); border-color: var(--safe-border); }
     .banner.secure { background: var(--safe-bg); border-color: var(--safe-border); color: var(--safe-text); }
     .msg.blocked .avatar { background: linear-gradient(135deg, #dc2626, #f59e0b); color: #fff; }
+    .scan-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; padding: 2px 9px; border-radius: 999px;
+      margin-top: 6px; font-weight: 500;
+      border: 1px solid;
+      cursor: help;
+    }
+    .scan-badge.allow { color: var(--safe-text); background: var(--safe-bg); border-color: var(--safe-border); }
+    .scan-badge.skip  { color: #f59e0b; background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.35); }
+    .scan-badge.block { color: var(--warn-text); background: var(--warn-bg); border-color: var(--warn-border); }
+    @media (prefers-color-scheme: light) {
+      .scan-badge.skip { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+    }
     .header-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
     .icon-btn {
       height: 34px; padding: 0 10px;
@@ -627,6 +640,7 @@
         role: el.dataset.role,
         content: el.dataset.content || '',
         sources: el.dataset.sources ? JSON.parse(el.dataset.sources) : null,
+        scan:    el.dataset.scan    ? JSON.parse(el.dataset.scan)    : null,
       }));
       localStorage.setItem(STORAGE_CHAT, JSON.stringify({ threadId, messages }));
     } catch {}
@@ -639,7 +653,9 @@
       if (!data.messages || !data.messages.length) return false;
       threadId = data.threadId || null;
       clearWelcome();
-      data.messages.forEach(m => appendMessage(m.role, m.content, { sources: m.sources, skipSave: true }));
+      data.messages.forEach(m => appendMessage(m.role, m.content, {
+        sources: m.sources, scan: m.scan, skipSave: true,
+      }));
       return true;
     } catch { return false; }
   }
@@ -662,6 +678,7 @@
     if (!opts.typing) {
       div.dataset.content = content;
       if (opts.sources) div.dataset.sources = JSON.stringify(opts.sources);
+      if (opts.scan)    div.dataset.scan    = JSON.stringify(opts.scan);
     }
     const avatar = role === 'user' ? 'You'
                  : role === 'system' ? '!'
@@ -682,10 +699,41 @@
         <div class="body">${bodyHtml}</div>
         ${opts.sources ? renderSources(opts.sources) : ''}
       </div>`;
+    if (opts.scan) attachScanBadge(div, opts.scan);
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
     if (!opts.typing && !opts.skipSave) { saveChat(); updateLimitHint(); }
     return div;
+  }
+
+  function attachScanBadge(messageDiv, scan) {
+    if (!scan) return;
+    messageDiv.dataset.scan = JSON.stringify(scan);
+    const bubble = messageDiv.querySelector('.bubble');
+    // Remove any previous badge (for retro-attach after the response)
+    bubble.querySelectorAll('.scan-badge').forEach(b => b.remove());
+    bubble.appendChild(renderScanBadge(scan));
+  }
+
+  function renderScanBadge(scan) {
+    const el = document.createElement('div');
+    const decision = scan.decision || (scan.scanned ? 'allow' : 'skip');
+    el.className = 'scan-badge ' + decision;
+    let label;
+    const score = (typeof scan.score === 'number') ? scan.score.toFixed(2) : null;
+    if (decision === 'allow') {
+      label = `🛡 scanned by SonnyLabs · score ${score ?? '—'} / ${scan.threshold ?? '—'}`;
+    } else if (decision === 'block') {
+      label = `🛡 blocked · score ${score ?? '—'} > ${scan.threshold ?? '—'}`;
+    } else {
+      // "skip" — scan didn't run (network, bad creds, etc). Important UX
+      // signal: firewall is on but didn't actually protect this message.
+      label = `🛡 scan unavailable · fail-open`;
+    }
+    el.textContent = label;
+    if (scan.reason) el.title = scan.reason;
+    else if (scan.scan_id) el.title = `scan_id: ${scan.scan_id}`;
+    return el;
   }
 
   // ---- Limit tracking ----
@@ -728,7 +776,7 @@
     if (userMessageCount() >= MAX_MESSAGES) {
       toast('Conversation limit reached. Start a new chat.', 'error'); return;
     }
-    appendMessage('user', text);
+    const userDiv = appendMessage('user', text);
     msgInput.value = ''; autoresize(); updateSend();
     const thinking = appendMessage('bot', '', { typing: true });
     setBusy(true);
@@ -745,16 +793,28 @@
       });
       const data = await res.json().catch(() => ({}));
       thinking.remove();
+
+      // Retro-attach the input scan badge to the user message we just rendered.
+      if (data.input_scan) attachScanBadge(userDiv, data.input_scan);
+
       if (!res.ok) appendMessage('system', `Error ${res.status}: ${data.detail || 'request failed'}`);
       else if (data.blocked) {
         threadId = data.thread_id || threadId;
-        const div = appendMessage('blocked', `🛡️ Blocked by firewall (${data.block_surface}): ${data.block_reason}`);
-        saveChat();
+        const blockedScan = data.output_scan && data.output_scan.decision === 'block'
+          ? data.output_scan : data.input_scan;
+        appendMessage(
+          'blocked',
+          `🛡️ Blocked by firewall (${data.block_surface}): ${data.block_reason}`,
+          { scan: blockedScan }
+        );
       } else {
         threadId = data.thread_id || threadId;
-        appendMessage('bot', data.reply || '*(empty reply)*', { sources: data.sources });
-        saveChat();
+        appendMessage('bot', data.reply || '*(empty reply)*', {
+          sources: data.sources,
+          scan: data.output_scan,
+        });
       }
+      saveChat();
     } catch (e) {
       thinking.remove();
       appendMessage('system', `Network error: ${e.message}`);

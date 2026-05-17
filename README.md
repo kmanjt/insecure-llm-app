@@ -197,6 +197,30 @@ When all three are set, `app/firewall.py` instantiates a `SonnyLabsClient` and w
 
 If `is_prompt_injection(result, threshold=0.65)` returns `True`, a `FirewallBlock` is raised. The chat handler converts that into a `{"blocked": true, "block_surface": ..., "block_reason": ...}` response and the UI renders a shield-iconed "Firewall" message instead of the model reply. For ingest, the response is `{"blocked": true, ...}` and the file never touches blob / vector store / AI Search.
 
+### Per-message scan badges
+
+Each chat message in v B carries a small pill underneath that surfaces what the firewall actually did, so users (and you) aren't guessing. Three states:
+
+| Badge | Decision | When | Example |
+|---|---|---|---|
+| 🛡 **scanned by SonnyLabs · score 0.12 / 0.65** (green) | `allow` | SonnyLabs returned a score below threshold | normal traffic |
+| 🛡 **scan unavailable · fail-open** (amber) | `skip` | scan call failed (network, bad creds, etc.). Hover for the underlying error. | placeholder credentials, SonnyLabs unreachable, invalid token |
+| 🛡 **blocked · score 0.87 > 0.65** (red) | `block` | injection detected above threshold; the model never saw the message | someone pastes a jailbreak |
+
+`/api/chat` returns the structured info under `input_scan` / `output_scan`:
+
+```json
+{
+  "reply": "...",
+  "input_scan":  { "decision": "allow", "score": 0.12, "scan_id": "...", "threshold": 0.65 },
+  "output_scan": { "decision": "allow", "score": 0.04, "scan_id": "...", "threshold": 0.65 }
+}
+```
+
+Same for `/api/upload`: the response includes a `firewall` field with `decision` + `score` + `scan_id`. The browser persists these along with the chat history in `localStorage`, so reloading the tab keeps the badges.
+
+With **placeholder credentials** (the default deploy state) every message shows the amber "fail-open" badge — that's the honest signal that v B isn't actually firewalling yet. Once you rotate in a real SonnyLabs token + analysis id and the SDK can reach the hosted API, badges flip to green with real scores.
+
 ### Document extraction (what gets scanned, what doesn't)
 
 `app/ingest.py` does lightweight in-process text extraction so binary documents can be firewall-scanned before they're stored anywhere:

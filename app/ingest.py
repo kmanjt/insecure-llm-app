@@ -90,21 +90,32 @@ def ingest_document(filename: str, content: bytes) -> dict:
         extracted = _extract_text_for_scan(filename, content)
         if extracted and extracted.strip():
             try:
-                tag = firewall.check_or_raise("document", extracted)
-                firewall_state = {"scanned": True, "scan_id": tag, "extracted_chars": len(extracted)}
+                scan = firewall.check_or_raise("document", extracted)
+                if scan is not None:
+                    firewall_state = {**scan, "extracted_chars": len(extracted)}
             except firewall.FirewallBlock as fb:
                 return {
                     "filename": filename,
                     "blocked": True,
                     "block_surface": fb.surface,
                     "block_reason": fb.summary,
+                    "block_score": fb.score,
+                    "block_threshold": fb.threshold,
                     "scan_id": fb.scan_id,
                 }
         elif extracted is None:
-            firewall_state = {"scanned": False, "reason": "no extractor for this file type"}
+            firewall_state = {
+                "decision": "skip",
+                "scanned": False,
+                "reason": "no extractor for this file type",
+            }
             print(f"[ingest] no extractor for {filename}; uploading unscanned", flush=True)
         else:
-            firewall_state = {"scanned": False, "reason": "extracted text was empty"}
+            firewall_state = {
+                "decision": "skip",
+                "scanned": False,
+                "reason": "extracted text was empty",
+            }
 
     # 3. Central blob (source of truth).
     blob_url = upload_blob(filename, content)

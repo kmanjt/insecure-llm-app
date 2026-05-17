@@ -233,7 +233,7 @@ def chat(
 
     # Firewall: scan the inbound user message before the agent sees it.
     try:
-        input_scan_id = firewall.check_or_raise("user_message", message)
+        input_scan = firewall.check_or_raise("user_message", message)
     except firewall.FirewallBlock as fb:
         return _blocked_response(thread_id, fb)
 
@@ -302,9 +302,11 @@ def chat(
 
     # Firewall: scan the assistant's response before the user sees it.
     try:
-        output_scan_id = firewall.check_or_raise("assistant_output", reply_text)
+        output_scan = firewall.check_or_raise("assistant_output", reply_text)
     except firewall.FirewallBlock as fb:
-        return _blocked_response(thread_id, fb, model_used=getattr(run, "model", None))
+        return _blocked_response(
+            thread_id, fb, input_scan=input_scan, model_used=getattr(run, "model", None)
+        )
 
     out = {
         "reply": reply_text,
@@ -312,15 +314,28 @@ def chat(
         "sources": sources,
         "model_used": getattr(run, "model", None),
     }
-    if input_scan_id:
-        out["input_scan_id"] = input_scan_id
-    if output_scan_id:
-        out["output_scan_id"] = output_scan_id
+    if input_scan is not None:
+        out["input_scan"] = input_scan
+    if output_scan is not None:
+        out["output_scan"] = output_scan
     return out
 
 
-def _blocked_response(thread_id: str | None, fb: "firewall.FirewallBlock", model_used: str | None = None) -> dict:
-    return {
+def _blocked_response(
+    thread_id: str | None,
+    fb: "firewall.FirewallBlock",
+    input_scan: dict | None = None,
+    model_used: str | None = None,
+) -> dict:
+    block_scan = {
+        "decision": "block",
+        "scanned": True,
+        "scan_id": fb.scan_id,
+        "score": fb.score,
+        "threshold": fb.threshold,
+        "reason": fb.summary,
+    }
+    out = {
         "reply": f"_Blocked by firewall ({fb.surface})._\n\n{fb.summary}",
         "thread_id": thread_id,
         "sources": [],
@@ -328,8 +343,19 @@ def _blocked_response(thread_id: str | None, fb: "firewall.FirewallBlock", model
         "blocked": True,
         "block_surface": fb.surface,
         "block_reason": fb.summary,
+        "block_score": fb.score,
+        "block_threshold": fb.threshold,
         "scan_id": fb.scan_id,
     }
+    # Echo whichever scan corresponds to the blocked surface so the UI can
+    # render a badge on the right message.
+    if fb.surface == "user_message":
+        out["input_scan"] = block_scan
+    elif fb.surface == "assistant_output":
+        if input_scan is not None:
+            out["input_scan"] = input_scan
+        out["output_scan"] = block_scan
+    return out
 
 
 # ---------------------------------------------------------------------------

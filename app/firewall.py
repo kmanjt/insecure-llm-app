@@ -42,11 +42,21 @@ THRESHOLD = 0.65
 class FirewallBlock(Exception):
     """Raised when the prompt-injection score exceeds the configured threshold."""
 
-    def __init__(self, surface: str, summary: str, scan_id: str | None = None):
+    def __init__(
+        self,
+        surface: str,
+        score: float,
+        threshold: float,
+        scan_id: str | None = None,
+    ):
         self.surface = surface
-        self.summary = summary
+        self.score = score
+        self.threshold = threshold
         self.scan_id = scan_id  # SDK 0.1.x calls this `tag`
-        super().__init__(f"Blocked by firewall ({surface}): {summary}")
+        self.summary = (
+            f"prompt-injection score {score:.2f} exceeds threshold {threshold}"
+        )
+        super().__init__(f"Blocked by firewall ({surface}): {self.summary}")
 
 
 # ---- Init ----------------------------------------------------------------
@@ -113,27 +123,66 @@ _SCAN_TYPE = {
 }
 
 
-def check_or_raise(surface: str, text: str, tag: str | None = None) -> str | None:
-    """Scan ``text`` and raise :class:`FirewallBlock` if the prompt-injection
-    score exceeds the threshold. Returns the SonnyLabs tag (for correlation)
-    or ``None`` when the firewall is disabled / failed open."""
+def check_or_raise(surface: str, text: str, tag: str | None = None) -> dict | None:
+    """Scan ``text``. Raises :class:`FirewallBlock` on a positive detection;
+    otherwise returns a structured dict describing what the firewall did so
+    the caller can surface it to the user.
+
+    Shape when firewall is enabled:
+
+        {
+            "decision":  "allow" | "skip",   # "block" comes via FirewallBlock
+            "scanned":   True | False,
+            "scan_id":   str | None,
+            "score":     float | None,
+            "threshold": float,
+            "reason":    str | None,         # populated when scanned=False
+        }
+
+    Returns ``None`` when the firewall isn't enabled at all (v A path)."""
     if _client is None:
         return None
+
     scan_type = _SCAN_TYPE.get(surface, "input")
     try:
         result = _client.analyze_text(text, scan_type=scan_type, tag=tag)
     except Exception as exc:  # noqa: BLE001
         print(f"[firewall] analyze_text raised on {surface} (fail-open): {exc}", flush=True)
-        return None
+        return {
+            "decision": "skip",
+            "scanned": False,
+            "scan_id": None,
+            "score": None,
+            "threshold": THRESHOLD,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+
     if not result.get("success"):
-        print(f"[firewall] analyze_text not successful on {surface} (fail-open): {result.get('error')}", flush=True)
-        return result.get("tag")
+        err = result.get("error") or "scan reported success=false"
+        print(f"[firewall] not successful on {surface} (fail-open): {err}", flush=True)
+        return {
+            "decision": "skip",
+            "scanned": False,
+            "scan_id": result.get("tag"),
+            "score": None,
+            "threshold": THRESHOLD,
+            "reason": err,
+        }
+
     injection = _client.get_prompt_injections(result, threshold=THRESHOLD)
+    score = float(injection.get("score", 0.0)) if injection else 0.0
     if injection and injection.get("detected"):
-        score = injection.get("score", 0.0)
         raise FirewallBlock(
             surface=surface,
-            summary=f"prompt-injection score {score:.2f} exceeds threshold {THRESHOLD}",
+            score=score,
+            threshold=THRESHOLD,
             scan_id=result.get("tag"),
         )
-    return result.get("tag")
+    return {
+        "decision": "allow",
+        "scanned": True,
+        "scan_id": result.get("tag"),
+        "score": score,
+        "threshold": THRESHOLD,
+        "reason": None,
+    }
