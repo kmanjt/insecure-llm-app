@@ -125,10 +125,17 @@ def check_or_raise(
         context["session_id"] = session_id
 
     try:
+        # capture=true asks SonnyLabs to retain the raw content for the
+        # configured retention window so each scan is replayable in the
+        # dashboard. Privacy trade-off: enabling capture means user
+        # messages and document snippets are stored at SonnyLabs. Fine for
+        # this research demo; flip to false (or expose as an env var) for
+        # a real deployment where retention matters.
         result = _client.create_scan(
             surface=surface,
             content={"type": "text", "text": text},
             context=context,
+            options={"capture": True},
         )
     except Exception as exc:  # noqa: BLE001
         print(
