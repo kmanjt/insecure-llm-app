@@ -300,13 +300,12 @@ def chat(
     sources = [_resolve_filename(s) for s in sources]
     reply_text = "".join(parts).strip()
 
-    # Firewall: scan the assistant's response before the user sees it.
-    try:
-        output_scan = firewall.check_or_raise("assistant_output", reply_text)
-    except firewall.FirewallBlock as fb:
-        return _blocked_response(
-            thread_id, fb, input_scan=input_scan, model_used=getattr(run, "model", None)
-        )
+    # NB: we deliberately do NOT scan the assistant output here. v B's
+    # security guarantee is "no malicious user input ever reaches the
+    # LLM" — that's enforced by the user_message scan above. Output
+    # scanning was producing false positives on benign model replies
+    # under the default SonnyLabs policy and doubled the firewall cost
+    # per round-trip.
 
     out = {
         "reply": reply_text,
@@ -316,26 +315,21 @@ def chat(
     }
     if input_scan is not None:
         out["input_scan"] = input_scan
-    if output_scan is not None:
-        out["output_scan"] = output_scan
     return out
 
 
 def _blocked_response(
     thread_id: str | None,
     fb: "firewall.FirewallBlock",
-    input_scan: dict | None = None,
     model_used: str | None = None,
 ) -> dict:
-    # Modern sonnylabs-sdk reports a categorical decision and findings; the
-    # legacy single "score" / "threshold" fields no longer apply.
     block_scan = {
         "decision": "block",
         "scanned": True,
         "scan_id": fb.scan_id,
         "reason": fb.summary,
     }
-    out = {
+    return {
         "reply": f"_Blocked by firewall ({fb.surface})._\n\n{fb.summary}",
         "thread_id": thread_id,
         "sources": [],
@@ -344,16 +338,8 @@ def _blocked_response(
         "block_surface": fb.surface,
         "block_reason": fb.summary,
         "scan_id": fb.scan_id,
+        "input_scan": block_scan,
     }
-    # Echo whichever scan corresponds to the blocked surface so the UI can
-    # render a badge on the right message.
-    if fb.surface == "user_message":
-        out["input_scan"] = block_scan
-    elif fb.surface == "assistant_output":
-        if input_scan is not None:
-            out["input_scan"] = input_scan
-        out["output_scan"] = block_scan
-    return out
 
 
 # ---------------------------------------------------------------------------

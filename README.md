@@ -191,11 +191,12 @@ When all three are set, `app/firewall.py` instantiates a `SonnyLabsClient` and w
 
 | Surface | What gets scanned | When |
 |---|---|---|
-| `user_message` (SDK `input`) | The user's message | Before it reaches the Foundry agent |
-| `assistant_output` (SDK `output`) | The agent's response | Before it's returned to the browser |
-| `document` (SDK `input`) | Extracted text from the upload | At ingest time, before the file lands in blob / vector store |
+| `user_message` | The user's message | Before it reaches the Foundry agent — a block here means the LLM is never invoked |
+| `document` | Extracted text from an upload (see *Document extraction* below) | At ingest time, before the file lands in blob / vector store |
 
-If `is_prompt_injection(result, threshold=0.65)` returns `True`, a `FirewallBlock` is raised. The chat handler converts that into a `{"blocked": true, "block_surface": ..., "block_reason": ...}` response and the UI renders a shield-iconed "Firewall" message instead of the model reply. For ingest, the response is `{"blocked": true, ...}` and the file never touches blob / vector store / AI Search.
+Assistant outputs are **not** scanned. v B's security guarantee is that no malicious *user input* ever reaches the LLM — that's enforced entirely by the `user_message` (and `document`) scans. Output scanning was producing false positives on benign model replies under the default policy and doubled the firewall cost per round-trip without adding a meaningful protection (the model can't have been poisoned by an input that was already blocked).
+
+When SonnyLabs returns `decision.action == "blocked"`, a `FirewallBlock` is raised. The chat handler converts that into a `{"blocked": true, "block_surface": ..., "block_reason": ...}` response and the UI renders a shield-iconed "Firewall" message instead of the model reply. For ingest, the response is `{"blocked": true, ...}` and the file never touches blob / vector store / AI Search.
 
 ### Per-message scan badges
 
@@ -207,13 +208,12 @@ Each chat message in v B carries a small pill underneath that surfaces what the 
 | 🛡 **scan unavailable · fail-open** (amber) | `skip` | scan call failed (network, bad creds, etc.). Hover for the underlying error. | placeholder credentials, SonnyLabs unreachable, invalid token |
 | 🛡 **blocked · score 0.87 > 0.65** (red) | `block` | injection detected above threshold; the model never saw the message | someone pastes a jailbreak |
 
-`/api/chat` returns the structured info under `input_scan` / `output_scan`:
+`/api/chat` returns the structured info under `input_scan` (assistant outputs are not scanned — see above):
 
 ```json
 {
   "reply": "...",
-  "input_scan":  { "decision": "allow", "score": 0.12, "scan_id": "...", "threshold": 0.65 },
-  "output_scan": { "decision": "allow", "score": 0.04, "scan_id": "...", "threshold": 0.65 }
+  "input_scan": { "decision": "allow", "scan_id": "01HK…", "action": "allowed", "reason": "policy_default" }
 }
 ```
 
